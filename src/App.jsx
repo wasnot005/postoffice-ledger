@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import { createClient } from '@supabase/supabase-js';
 import { Plus, Users, ArrowLeft, Download, BarChart2, Home, FileText, User, Banknote, Landmark, Search, Trash2, Edit, X } from 'lucide-react';
 
 // --- Supabase Setup ---
@@ -737,5 +737,7 @@ export default function App() {
     </div>
   );
 }
+
+export default App;
 
 
