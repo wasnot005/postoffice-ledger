@@ -90,12 +90,16 @@ const Header = ({ currentPage }) => {
 const Dashboard = ({ undepositedCash, transactions, customerBalances, onNavigate }) => {
     const todayStr = today();
     const todaysCollections = transactions
-        .filter(t => t.date === todayStr && t.type === 'collection')
+        .filter(t => t.date === todayStr && t.type === 'collection' && t.status === 'completed')
         .reduce((sum, t) => sum + t.amount, 0);
 
     const todaysDeposits = transactions
         .filter(t => t.date === todayStr && t.type === 'deposit')
         .reduce((sum, t) => sum + t.amount, 0);
+
+    const scheduledCollections = transactions.filter(t => t.type === 'collection' && t.status === 'scheduled');
+    const scheduledCount = scheduledCollections.length;
+    const overdueCount = scheduledCollections.filter(t => new Date(t.date) <= new Date(todayStr)).length;
 
     const pendingCustomersCount = Object.values(customerBalances).filter(bal => bal > 0).length;
 
@@ -133,6 +137,16 @@ const Dashboard = ({ undepositedCash, transactions, customerBalances, onNavigate
                  </div>
             </Card>
 
+            <Card>
+                 <div className="flex justify-between items-center p-4">
+                    <div>
+                        <p className="font-semibold text-slate-700">Upcoming Collections: {scheduledCount}</p>
+                        <p className="text-sm text-slate-500">{overdueCount} are overdue for confirmation.</p>
+                    </div>
+                    <Button onClick={() => onNavigate('upcomingCollections')} variant="secondary">View</Button>
+                 </div>
+            </Card>
+
             <div className="grid grid-cols-2 gap-4 pt-4">
                 <DashboardButton icon={<Banknote />} label="Collect Cash" onClick={() => onNavigate('collectCash')} />
                 <DashboardButton icon={<Landmark />} label="Deposit Batch" onClick={() => onNavigate('batchDeposit')} />
@@ -143,21 +157,28 @@ const Dashboard = ({ undepositedCash, transactions, customerBalances, onNavigate
     );
 };
 
-const CollectCashForm = ({ customers, onAddCollection, onAddCustomer, onBack }) => {
-    const [customerId, setCustomerId] = useState('');
-    const [amount, setAmount] = useState('');
-    const [date, setDate] = useState(today());
-    const [note, setNote] = useState('');
+const CollectCashForm = ({ customers, onSaveCollection, onAddCustomer, onBack, initialData }) => {
+    const [customerId, setCustomerId] = useState(initialData?.customer_id || '');
+    const [amount, setAmount] = useState(initialData ? (initialData.amount / 100).toString() : '');
+    const [date, setDate] = useState(initialData?.date || today());
+    const [note, setNote] = useState(initialData?.note || '');
     const [showNewCustomer, setShowNewCustomer] = useState(false);
     const [newCustomerName, setNewCustomerName] = useState('');
     const [newCustomerPhone, setNewCustomerPhone] = useState('');
+
+    const isFutureDate = useMemo(() => new Date(date) > new Date(today()), [date]);
 
     const handleSave = async () => {
         if (!customerId || !amount || amount <= 0) {
             alert("Please select a customer and enter a valid amount.");
             return;
         }
-        await onAddCollection({ customerId, amount, date, note });
+        if (initialData) {
+            await onSaveCollection({ id: initialData.id, customerId, amount, date, note });
+        } else {
+            const status = isFutureDate ? 'scheduled' : 'completed';
+            await onSaveCollection({ customerId, amount, date, note, status });
+        }
     };
     
     const handleAddNewCustomer = async () => {
@@ -178,7 +199,7 @@ const CollectCashForm = ({ customers, onAddCollection, onAddCustomer, onBack }) 
         <Card>
             <Card.Header>
                 <BackButton onClick={onBack} />
-                <Card.Title>New Cash Collection</Card.Title>
+                <Card.Title>{initialData ? 'Edit Collection' : 'New Cash Collection'}</Card.Title>
             </Card.Header>
             <Card.Content className="space-y-4">
                 {showNewCustomer ? (
@@ -209,6 +230,9 @@ const CollectCashForm = ({ customers, onAddCollection, onAddCustomer, onBack }) 
                 <div>
                     <label className="text-sm font-medium text-slate-600">Date</label>
                     <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+                    {isFutureDate && (
+                        <p className="text-sm text-blue-600 mt-1">ℹ️ This will be saved as a Scheduled Collection.</p>
+                    )}
                 </div>
                 
                 <div>
@@ -216,7 +240,7 @@ const CollectCashForm = ({ customers, onAddCollection, onAddCustomer, onBack }) 
                     <Input placeholder="e.g., for September premium" value={note} onChange={e => setNote(e.target.value)} />
                 </div>
                 
-                <Button onClick={handleSave} className="w-full">Save Collection</Button>
+                <Button onClick={handleSave} className="w-full">{initialData ? 'Save Changes' : 'Save Collection'}</Button>
             </Card.Content>
         </Card>
     );
@@ -457,6 +481,53 @@ const CustomerDetail = ({ customer, transactions, balance, onBack }) => {
     );
 };
 
+const UpcomingCollections = ({ transactions, customers, onConfirm, onDelete, onEdit, onBack }) => {
+    const todayStr = today();
+    const sorted = [...transactions].sort((a, b) => {
+        const aOverdue = new Date(a.date) <= new Date(todayStr);
+        const bOverdue = new Date(b.date) <= new Date(todayStr);
+        if (aOverdue !== bOverdue) return aOverdue ? -1 : 1;
+        return new Date(a.date) - new Date(b.date);
+    });
+
+    return (
+        <Card>
+            <Card.Header>
+                <BackButton onClick={onBack} />
+                <Card.Title>Upcoming Collections</Card.Title>
+            </Card.Header>
+            <Card.Content>
+                {sorted.length > 0 ? (
+                    <ul className="space-y-4">
+                        {sorted.map(t => {
+                            const customer = customers.find(c => c.id === t.customer_id);
+                            const isOverdue = new Date(t.date) <= new Date(todayStr);
+                            return (
+                                <li key={t.id} className="p-4 bg-white rounded-lg border space-y-2">
+                                    <div className="flex justify-between items-center">
+                                        <div>
+                                            <p className="font-semibold">{customer?.name || 'N/A'}</p>
+                                            <p className="text-sm text-slate-500">Due: {t.date}{isOverdue ? ' (Overdue)' : ''}</p>
+                                        </div>
+                                        <p className="font-bold">{formatCurrency(t.amount)}</p>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        {isOverdue && <Button onClick={() => onConfirm(t.id)}>Confirm Collection</Button>}
+                                        <Button onClick={() => onEdit(t)} variant="secondary">Edit</Button>
+                                        <Button onClick={() => onDelete(t.id)} variant="secondary">Delete</Button>
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                ) : (
+                    <p className="text-center text-slate-500">No scheduled collections.</p>
+                )}
+            </Card.Content>
+        </Card>
+    );
+};
+
 const Reports = ({ customers, transactions, customerBalances, onBack }) => {
     const [activeReport, setActiveReport] = useState('pending');
 
@@ -467,7 +538,7 @@ const Reports = ({ customers, transactions, customerBalances, onBack }) => {
                     .filter(c => customerBalances[c.id] > 0)
                     .map(c => {
                         const custTransactions = transactions.filter(t => t.customer_id === c.id);
-                        const totalCollected = custTransactions.filter(t => t.type === 'collection').reduce((sum, t) => sum + t.amount, 0);
+                        const totalCollected = custTransactions.filter(t => t.type === 'collection' && t.status === 'completed').reduce((sum, t) => sum + t.amount, 0);
                         const totalDeposited = custTransactions.filter(t => t.type === 'deposit').reduce((sum, t) => sum + t.amount, 0);
                         return {
                             ...c,
@@ -511,7 +582,9 @@ const Reports = ({ customers, transactions, customerBalances, onBack }) => {
                     </div>
                 );
             case 'cashbook':
-                 const dailyEntries = transactions.filter(t => t.date === today()).sort((a,b) => new Date(b.date) - new Date(a.date));
+                 const dailyEntries = transactions
+                     .filter(t => t.date === today() && t.status === 'completed')
+                     .sort((a,b) => new Date(b.date) - new Date(a.date));
                  return (
                      <div>
                         <h3 className="text-lg font-semibold mb-2">Daily Cashbook ({today()})</h3>
@@ -578,6 +651,7 @@ export default function App() {
   const [customers, setCustomers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [editingTransaction, setEditingTransaction] = useState(null);
 
   // --- Data Fetching ---
   const fetchData = async () => {
@@ -590,7 +664,7 @@ export default function App() {
         if (transactionsError) throw transactionsError;
 
         setCustomers(customersData || []);
-        setTransactions(transactionsData || []);
+        setTransactions((transactionsData || []).map(t => ({ ...t, status: t.status || 'completed' })));
     } catch (error) {
         console.error("Error fetching data:", error);
         alert("Could not fetch data from the server. Check your Supabase credentials and network connection.");
@@ -614,9 +688,9 @@ export default function App() {
     const balances = {};
     customers.forEach(c => balances[c.id] = 0);
     transactions.forEach(t => {
-      const customerId = t.customer_id; 
+      const customerId = t.customer_id;
       if (balances[customerId] === undefined) return;
-      if (t.type === 'collection') {
+      if (t.type === 'collection' && t.status === 'completed') {
         balances[customerId] += t.amount;
       } else if (t.type === 'deposit') {
         balances[customerId] -= t.amount;
@@ -627,7 +701,7 @@ export default function App() {
 
   const undepositedCash = useMemo(() => {
     return transactions.reduce((total, t) => {
-      if (t.type === 'collection') return total + t.amount;
+      if (t.type === 'collection' && t.status === 'completed') return total + t.amount;
       if (t.type === 'deposit') return total - t.amount;
       return total;
     }, 0);
@@ -635,6 +709,9 @@ export default function App() {
 
   const navigateTo = (pageName, customerId = null) => {
     setSelectedCustomerId(customerId);
+    if (pageName !== 'collectCash') {
+      setEditingTransaction(null);
+    }
     setPage(pageName);
   };
 
@@ -655,13 +732,14 @@ export default function App() {
     return data[0];
   };
 
-  const addCollection = async ({ customerId, amount, date, note }) => {
+  const addCollection = async ({ customerId, amount, date, note, status }) => {
     const { error } = await supabase.from('transactions').insert({
       customer_id: customerId,
       type: 'collection',
       amount: parseInt(parseFloat(amount) * 100, 10),
       date,
       note,
+      status,
     });
 
     if (error) {
@@ -669,7 +747,51 @@ export default function App() {
         alert(`Error: ${error.message}`);
     } else {
         await fetchData();
-        navigateTo('customers');
+        navigateTo(status === 'scheduled' ? 'dashboard' : 'customers');
+    }
+  };
+
+  const updateScheduledCollection = async ({ id, customerId, amount, date, note }) => {
+    const { error } = await supabase.from('transactions')
+      .update({
+        customer_id: customerId,
+        amount: parseInt(parseFloat(amount) * 100, 10),
+        date,
+        note,
+      })
+      .eq('id', id);
+
+    if (error) {
+      console.error("Error updating collection:", error);
+      alert(`Error: ${error.message}`);
+    } else {
+      await fetchData();
+      setEditingTransaction(null);
+      setPage('upcomingCollections');
+    }
+  };
+
+  const confirmScheduledCollection = async (id) => {
+    const { error } = await supabase.from('transactions')
+      .update({ status: 'completed' })
+      .eq('id', id);
+    if (error) {
+      console.error("Error confirming collection:", error);
+      alert(`Error: ${error.message}`);
+    } else {
+      await fetchData();
+    }
+  };
+
+  const deleteScheduledCollection = async (id) => {
+    const { error } = await supabase.from('transactions')
+      .delete()
+      .eq('id', id);
+    if (error) {
+      console.error("Error deleting collection:", error);
+      alert(`Error: ${error.message}`);
+    } else {
+      await fetchData();
     }
   };
   
@@ -701,19 +823,48 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case 'collectCash':
-        return <CollectCashForm customers={customers} onAddCollection={addCollection} onAddCustomer={addCustomer} onBack={() => navigateTo('dashboard')} />;
+        return (
+          <CollectCashForm
+            customers={customers}
+            onSaveCollection={editingTransaction ? updateScheduledCollection : addCollection}
+            onAddCustomer={addCustomer}
+            onBack={() => {
+              if (editingTransaction) {
+                setEditingTransaction(null);
+                navigateTo('upcomingCollections');
+              } else {
+                navigateTo('dashboard');
+              }
+            }}
+            initialData={editingTransaction}
+          />
+        );
       case 'batchDeposit':
         return <BatchDepositForm customers={customers} customerBalances={customerBalances} undepositedCash={undepositedCash} onAddBatchDeposit={addBatchDeposit} onBack={() => navigateTo('dashboard')} />;
       case 'customers':
         return <CustomersList customers={customers} balances={customerBalances} onSelectCustomer={(id) => navigateTo('customerDetail', id)} onBack={() => navigateTo('dashboard')} />;
       case 'customerDetail':
         const customer = customers.find(c => c.id === selectedCustomerId);
-        const customerTransactions = transactions.filter(t => t.customer_id === selectedCustomerId).sort((a,b) => new Date(b.date) - new Date(a.date) || new Date(b.created_at) - new Date(a.created_at));
+        const customerTransactions = transactions
+            .filter(t => t.customer_id === selectedCustomerId && t.status === 'completed')
+            .sort((a,b) => new Date(b.date) - new Date(a.date) || new Date(b.created_at) - new Date(a.created_at));
         return <CustomerDetail customer={customer} transactions={customerTransactions} balance={customerBalances[selectedCustomerId]} onBack={() => navigateTo('customers')} />;
       case 'reports':
         return <Reports customers={customers} transactions={transactions} customerBalances={customerBalances} onBack={() => navigateTo('dashboard')} />;
+      case 'upcomingCollections':
+        const scheduled = transactions.filter(t => t.type === 'collection' && t.status === 'scheduled');
+        return (
+          <UpcomingCollections
+            transactions={scheduled}
+            customers={customers}
+            onConfirm={confirmScheduledCollection}
+            onDelete={deleteScheduledCollection}
+            onEdit={(t) => { setEditingTransaction(t); navigateTo('collectCash'); }}
+            onBack={() => navigateTo('dashboard')}
+          />
+        );
       default:
-        return <Dashboard 
+        return <Dashboard
             undepositedCash={undepositedCash}
             transactions={transactions}
             customerBalances={customerBalances}
